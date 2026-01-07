@@ -120,6 +120,19 @@ const server = http.createServer((req, res) => {
         if (!["home", "taken", "dropped", "captured"].includes(flagState)) {
           return send(res, 400, { error: "invalid state" });
         }
+        // If a flag was captured, award a point to the capturing team and reset the flag home.
+        if (flagState === "captured") {
+          const carrierTeam = carrier && state.assignments[carrier];
+          const scoringTeam =
+            carrierTeam === "red" || carrierTeam === "blue"
+              ? carrierTeam
+              : flag === "red"
+              ? "blue"
+              : "red";
+          state.scores[scoringTeam] = (state.scores[scoringTeam] || 0) + 1;
+          state.flags[flag] = { state: "home", carrier: "" };
+          return send(res, 200, { ok: true, flags: state.flags, scores: state.scores });
+        }
         state.flags[flag] = { state: flagState, carrier: carrier || "" };
         return send(res, 200, { ok: true, flags: state.flags });
       } catch (e) {
