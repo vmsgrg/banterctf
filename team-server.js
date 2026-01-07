@@ -1,14 +1,21 @@
-// Simple in-memory team tracker.
+// Simple in-memory CTF tracker.
 // Run with: `node team-server.js`
 // Endpoints:
-//   GET  /teams            -> { red, blue, assignments }
-//   POST /teams/assign     -> body: { userId, team }
+//   GET  /state              -> { counts, assignments, scores, flags }
+//   POST /assign             -> { userId, team }
+//   POST /score              -> { team, delta } (delta defaults to 1)
+//   POST /flag               -> { flag, state, carrier } state: home|taken|dropped|captured
 // This is intentionally minimal and non-persistent.
 
 const http = require("http");
 
 const state = {
   assignments: {}, // userId -> "red" | "blue"
+  scores: { red: 0, blue: 0 },
+  flags: {
+    red: { state: "home", carrier: "" }, // red flag owned by red team
+    blue: { state: "home", carrier: "" },
+  },
 };
 
 function counts() {
@@ -43,11 +50,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.method === "GET" && req.url === "/teams") {
-    return send(res, 200, { ...counts(), assignments: state.assignments });
+  if (req.method === "GET" && req.url === "/state") {
+    return send(res, 200, {
+      counts: counts(),
+      assignments: state.assignments,
+      scores: state.scores,
+      flags: state.flags,
+    });
   }
 
-  if (req.method === "POST" && req.url === "/teams/assign") {
+  if (req.method === "POST" && req.url === "/assign") {
     let raw = "";
     req.on("data", (chunk) => {
       raw += chunk;
@@ -61,7 +73,55 @@ const server = http.createServer((req, res) => {
           return send(res, 400, { error: "invalid payload" });
         }
         state.assignments[userId] = team;
-        return send(res, 200, { ok: true, ...counts(), assignments: state.assignments });
+        return send(res, 200, { ok: true, counts: counts(), assignments: state.assignments });
+      } catch (e) {
+        return send(res, 400, { error: "bad json" });
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/score") {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1e6) req.connection.destroy();
+    });
+    req.on("end", () => {
+      try {
+        const data = JSON.parse(raw || "{}");
+        const { team, delta = 1 } = data;
+        if (team !== "red" && team !== "blue") {
+          return send(res, 400, { error: "invalid team" });
+        }
+        const d = Number(delta) || 0;
+        state.scores[team] = (state.scores[team] || 0) + d;
+        return send(res, 200, { ok: true, scores: state.scores });
+      } catch (e) {
+        return send(res, 400, { error: "bad json" });
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/flag") {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1e6) req.connection.destroy();
+    });
+    req.on("end", () => {
+      try {
+        const data = JSON.parse(raw || "{}");
+        const { flag, state: flagState, carrier = "" } = data;
+        if (flag !== "red" && flag !== "blue") {
+          return send(res, 400, { error: "invalid flag" });
+        }
+        if (!["home", "taken", "dropped", "captured"].includes(flagState)) {
+          return send(res, 400, { error: "invalid state" });
+        }
+        state.flags[flag] = { state: flagState, carrier: carrier || "" };
+        return send(res, 200, { ok: true, flags: state.flags });
       } catch (e) {
         return send(res, 400, { error: "bad json" });
       }
