@@ -16,6 +16,7 @@ const state = {
     red: { state: "home", carrier: "" }, // red flag owned by red team
     blue: { state: "home", carrier: "" },
   },
+  flagTransforms: {}, // flagName -> { pos?, rot? }
 };
 
 function counts() {
@@ -56,7 +57,58 @@ const server = http.createServer((req, res) => {
       assignments: state.assignments,
       scores: state.scores,
       flags: state.flags,
+      flagTransforms: state.flagTransforms,
     });
+  }
+
+  if (req.method === "POST" && req.url === "/state") {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > 1e6) req.connection.destroy();
+    });
+    req.on("end", () => {
+      try {
+        const data = JSON.parse(raw || "{}");
+        if (data.assignments && typeof data.assignments === "object") {
+          Object.entries(data.assignments).forEach(([uid, team]) => {
+            if (team === "red" || team === "blue") {
+              state.assignments[uid] = team;
+            }
+          });
+        }
+        if (data.scores && typeof data.scores === "object") {
+          if (Number.isFinite(data.scores.red)) state.scores.red = Math.max(state.scores.red || 0, Number(data.scores.red));
+          if (Number.isFinite(data.scores.blue))
+            state.scores.blue = Math.max(state.scores.blue || 0, Number(data.scores.blue));
+        }
+        if (data.flags && typeof data.flags === "object") {
+          ["red", "blue"].forEach((flag) => {
+            const f = data.flags[flag];
+            if (!f || typeof f !== "object") return;
+            const stateVal = f.state;
+            const carrier = typeof f.carrier === "string" ? f.carrier : "";
+            if (["home", "taken", "dropped", "captured"].includes(stateVal)) {
+              state.flags[flag] = { state: stateVal, carrier };
+            }
+          });
+        }
+        if (data.flagTransforms && typeof data.flagTransforms === "object") {
+          state.flagTransforms = data.flagTransforms;
+        }
+        return send(res, 200, {
+          ok: true,
+          counts: counts(),
+          assignments: state.assignments,
+          scores: state.scores,
+          flags: state.flags,
+          flagTransforms: state.flagTransforms,
+        });
+      } catch (e) {
+        return send(res, 400, { error: "bad json" });
+      }
+    });
+    return;
   }
 
   if (req.method === "POST" && req.url === "/assign") {
