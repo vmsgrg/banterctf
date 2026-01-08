@@ -8,6 +8,11 @@
 // This is intentionally minimal and non-persistent.
 
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
+
+const STATE_FILE = process.env.STATE_FILE || path.join(__dirname, "ctf-state.json");
+let persistPending = false;
 
 const state = {
   assignments: {}, // userId -> "red" | "blue"
@@ -18,6 +23,34 @@ const state = {
   },
   flagTransforms: {}, // flagName -> { pos?, rot? }
 };
+
+function loadStateFromDisk() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return;
+    const raw = fs.readFileSync(STATE_FILE, "utf8");
+    const data = JSON.parse(raw || "{}");
+    if (data.assignments && typeof data.assignments === "object") state.assignments = data.assignments;
+    if (data.scores && typeof data.scores === "object") state.scores = data.scores;
+    if (data.flags && typeof data.flags === "object") state.flags = data.flags;
+    if (data.flagTransforms && typeof data.flagTransforms === "object") state.flagTransforms = data.flagTransforms;
+    console.log(`[state] loaded from ${STATE_FILE}`);
+  } catch (e) {
+    console.warn(`[state] failed to load ${STATE_FILE}`, e);
+  }
+}
+
+function persistStateToDisk() {
+  if (persistPending) return;
+  persistPending = true;
+  setTimeout(() => {
+    persistPending = false;
+    try {
+      fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+    } catch (e) {
+      console.warn(`[state] failed to persist to ${STATE_FILE}`, e);
+    }
+  }, 50);
+}
 
 function counts() {
   let red = 0;
@@ -96,6 +129,7 @@ const server = http.createServer((req, res) => {
         if (data.flagTransforms && typeof data.flagTransforms === "object") {
           state.flagTransforms = data.flagTransforms;
         }
+        persistStateToDisk();
         return send(res, 200, {
           ok: true,
           counts: counts(),
@@ -125,6 +159,7 @@ const server = http.createServer((req, res) => {
           return send(res, 400, { error: "invalid payload" });
         }
         state.assignments[userId] = team;
+        persistStateToDisk();
         return send(res, 200, { ok: true, counts: counts(), assignments: state.assignments });
       } catch (e) {
         return send(res, 400, { error: "bad json" });
@@ -148,6 +183,7 @@ const server = http.createServer((req, res) => {
         }
         const d = Number(delta) || 0;
         state.scores[team] = (state.scores[team] || 0) + d;
+        persistStateToDisk();
         return send(res, 200, { ok: true, scores: state.scores });
       } catch (e) {
         return send(res, 400, { error: "bad json" });
@@ -183,9 +219,11 @@ const server = http.createServer((req, res) => {
               : "red";
           state.scores[scoringTeam] = (state.scores[scoringTeam] || 0) + 1;
           state.flags[flag] = { state: "home", carrier: "" };
+          persistStateToDisk();
           return send(res, 200, { ok: true, flags: state.flags, scores: state.scores });
         }
         state.flags[flag] = { state: flagState, carrier: carrier || "" };
+        persistStateToDisk();
         return send(res, 200, { ok: true, flags: state.flags });
       } catch (e) {
         return send(res, 400, { error: "bad json" });
@@ -198,6 +236,7 @@ const server = http.createServer((req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+loadStateFromDisk();
 server.listen(PORT, () => {
   console.log(`Team server listening on http://localhost:${PORT}`);
 });
